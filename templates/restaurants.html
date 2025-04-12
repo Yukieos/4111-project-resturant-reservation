@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Restaurants</title>
+    <style>
+        body {
+            font-family: 'Times New Roman', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .restaurant-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+        .restaurant-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .restaurant-name {
+            font-size: 1.5em;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .restaurant-info {
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .rating {
+            color: #ffd700;
+            margin-bottom: 10px;
+        }
+        .menu-section {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+        .menu-item {
+            margin-bottom: 10px;
+        }
+        .btn {
+            display: inline-block;
+            padding: 8px 16px;
+            background-color: #b7e6b9;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        .btn:hover {
+            background-color: #b7e6b9;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Our Restaurants</h1>
+    </div>
+    <div class="restaurant-grid">
+        {% for restaurant in restaurants %}
+        <div class="restaurant-card">
+            <h2 class="restaurant-name">{{ restaurant.restaurant_name }}</h2>
+            <p>Restaurant ID: {{ restaurant.restaurant_id }}</p>
+            <div class="restaurant-info">
+                <p>Price Range: {{ restaurant.price_range }}</p>
+                <p>Category: {{ restaurant.category }}</p>
+                <p>Michelin Stars: {{ restaurant.michelin_stars }}</p>
+                <p>Opening Hours: {{ restaurant.opening_hours }}</p>
+            </div>
+            <div class="menu-section">
+                <h3>Menu</h3>
+                <ul>
+                    {% for item in menu[restaurant.restaurant_id] %}
+                        <li>{{ item.name }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div class="rating">
+                {% if restaurant.avg_rating %}
+                    Rating: {{ restaurant.avg_rating }}/5
+                {% else %}
+                    No ratings yet
+                {% endif %}
+            </div>
+            <a href="/reservation/{{ restaurant.restaurant_id }}" class="btn">Make Reservation</a>
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html> 
