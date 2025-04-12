@@ -16,7 +16,7 @@ app = Flask(__name__, template_folder=tmpl_dir)
 DATABASE_USERNAME = "wy2470"
 DATABASE_PASSWRD = "342930"
 DATABASE_HOST = "34.148.223.31"
-DATABASEURI = f"postgresql://wy2470:342930@34.148.223.31/proj1part2"
+DATABASEURI = f"postgresql://{DATABASE_USERNAME}:{DATABASE_PASSWRD}@{DATABASE_HOST}/proj1part2"
 
 engine = create_engine(DATABASEURI)
 
