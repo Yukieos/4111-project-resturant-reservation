@@ -17,7 +17,8 @@ The system allows users to browse restaurants, view available time slots, and ma
 - Admin page for restaurant owners
 - **Restaurant Recommendations** *(Self-implemented additional feature outside course requirements)*
 
-## Recommendation System
+#### **Recommendation System: **
+
 The system will provide personalized restaurant suggestions based on user dining history using:
 - **Markov Chain Analysis**: Predicts next cuisine preference based on user's dining patterns
 - **Multi-Factor Scoring Algorithm**: Combines multiple factors for optimal recommendations
@@ -28,7 +29,7 @@ The system will provide personalized restaurant suggestions based on user dining
   - Rating Weight (10%)
 
 ### **How to Use:**
-1. Navigate to /recommendations endpoint
+1. Navigate to the /recommendations endpoint
 2. Enter your user credentials (last name + phone number)
 3. Get personalized restaurant recommendations with match scores
 4. Click through to make reservations at recommended restaurants
