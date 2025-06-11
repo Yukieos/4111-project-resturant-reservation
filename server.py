@@ -2,8 +2,16 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 from sqlalchemy.pool import NullPool
-from flask import Flask, request, render_template, g, redirect
+from flask import Flask, request, render_template, g, redirect, jsonify
 import logging
+import pandas as pd
+import numpy as np
+from collections import defaultdict
+import random
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics.pairwise import cosine_similarity
+from geopy.distance import geodesic
+import requests
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -178,6 +186,185 @@ def search():
 			return render_template("search.html", error="Error searching for user information")
 	
 	return render_template("search.html")
+
+def build_transition_matrix(cuisines):
+	transition_matrix = defaultdict(lambda: defaultdict(int))
+	for i in range(len(cuisines) - 1):
+		current = cuisines[i]
+		next_cuisine = cuisines[i + 1]
+		transition_matrix[current][next_cuisine] += 1
+
+	for current in transition_matrix:
+		total = sum(transition_matrix[current].values())
+		for next_cuisine in transition_matrix[current]:
+			transition_matrix[current][next_cuisine] /= total
+	
+	return transition_matrix
+
+def predict_next_cuisine(current_cuisine, transition_matrix):
+	if current_cuisine not in transition_matrix:
+		return None
+	next_cuisines = list(transition_matrix[current_cuisine].keys())
+	probabilities = list(transition_matrix[current_cuisine].values())
+	next_cuisine = random.choices(next_cuisines, probabilities)[0]
+	return next_cuisine
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+	if lat1 is None or lon1 is None or lat2 is None or lon2 is None:
+		return float('inf')
+	coords_1 = (lat1, lon1)
+	coords_2 = (lat2, lon2)
+	return geodesic(coords_1, coords_2).meters
+
+def get_user_recommendations(user_id):
+	history_query = """
+	SELECT r.Category, res.Restaurant_ID, res.Restaurant_name, r.Price_range
+	FROM Reservation res
+	JOIN Restaurant r ON res.Restaurant_ID = r.Restaurant_ID
+	WHERE res.User_ID = :user_id
+	ORDER BY res.Date DESC, res.Time DESC
+	"""
+	
+	user_history = []
+	for row in g.conn.execute(text(history_query), {'user_id': user_id}):
+		user_history.append(dict(row._mapping))
+	
+	if not user_history:
+		return None, "No reservation history found for this user"
+	
+	visited_cuisines = [visit['category'] for visit in user_history if visit['category']]
+	
+	if len(visited_cuisines) < 2:
+		cuisine_counts = defaultdict(int)
+		for cuisine in visited_cuisines:
+			cuisine_counts[cuisine] += 1
+		predicted_cuisine = max(cuisine_counts.keys(), key=lambda k: cuisine_counts[k])
+	else:
+		transition_matrix = build_transition_matrix(visited_cuisines)
+		last_cuisine = visited_cuisines[-1]
+		predicted_cuisine = predict_next_cuisine(last_cuisine, transition_matrix)
+		
+		if predicted_cuisine is None:
+			cuisine_counts = defaultdict(int)
+			for cuisine in visited_cuisines:
+				cuisine_counts[cuisine] += 1
+			predicted_cuisine = max(cuisine_counts.keys(), key=lambda k: cuisine_counts[k])
+	
+	all_restaurants_query = """
+	SELECT r.Restaurant_ID, r.Restaurant_name, r.Price_range, r.Category, 
+	       AVG(rev.Rating) as avg_rating
+	FROM Restaurant r
+	LEFT JOIN Review rev ON r.Restaurant_ID = rev.Restaurant_ID
+	GROUP BY r.Restaurant_ID, r.Restaurant_name, r.Price_range, r.Category
+	"""
+	restaurants_data = []
+	for row in g.conn.execute(text(all_restaurants_query)):
+		restaurants_data.append(dict(row._mapping))
+	df = pd.DataFrame(restaurants_data)
+	user_visits_df = pd.DataFrame(user_history)
+	
+	if df.empty:
+		return None, "No restaurants found"
+	
+	visited_restaurant_ids = [visit['restaurant_id'] for visit in user_history]
+	df = df[~df['restaurant_id'].isin(visited_restaurant_ids)]
+	
+	if df.empty:
+		return None, "No new restaurants to recommend"
+	
+	df['cuisine_match'] = (df['category'] == predicted_cuisine).astype(int)
+	
+	price_encoder = LabelEncoder()
+	all_prices = list(df['price_range'].dropna()) + list(user_visits_df['price_range'].dropna())
+	price_encoder.fit(all_prices)
+	
+	df['price_encoded'] = price_encoder.transform(df['price_range'].fillna('$'))
+	user_visits_df['price_encoded'] = price_encoder.transform(user_visits_df['price_range'].fillna('$'))
+	
+	user_avg_price_encoded = user_visits_df['price_encoded'].mean()
+	user_avg_price_encoded_reshaped = np.array([user_avg_price_encoded]).reshape(1, -1)
+	
+	df['price_similarity'] = cosine_similarity(
+		user_avg_price_encoded_reshaped,
+		df['price_encoded'].values.reshape(-1, 1)
+	).flatten()
+	
+	df['location_similarity'] = np.random.uniform(0.3, 1.0, len(df))
+	
+	cuisine_weight = 0.4 
+	price_weight = 0.3   
+	location_weight = 0.2 
+	rating_weight = 0.1  
+	
+	df['final_score'] = (
+		cuisine_weight * df['cuisine_match'] +
+		price_weight * df['price_similarity'] +
+		location_weight * df['location_similarity'] +
+		rating_weight * (df['avg_rating'].fillna(0) / 5.0)
+	)
+	
+	top_recommendations = df.sort_values(by='final_score', ascending=False).head(5)
+	
+	recommendations = []
+	for _, restaurant in top_recommendations.iterrows():
+		recommendations.append({
+			'restaurant_id': int(restaurant['restaurant_id']),
+			'name': restaurant['restaurant_name'],
+			'category': restaurant['category'],
+			'price_range': restaurant['price_range'],
+			'avg_rating': float(restaurant['avg_rating']) if restaurant['avg_rating'] else None,
+			'predicted_cuisine': predicted_cuisine,
+			'final_score': float(restaurant['final_score'])
+		})
+	
+	return {
+		'user_id': user_id,
+		'predicted_next_cuisine': predicted_cuisine,
+		'recommendations': recommendations
+	}, None
+
+@app.route('/recommendations/<int:user_id>')
+def get_recommendations(user_id):
+	try:
+		result, error = get_user_recommendations(user_id)
+		if error:
+			return jsonify({"error": error}), 404
+		return jsonify(result)
+		
+	except Exception as e:
+		logger.error(f"Error generating recommendations: {str(e)}")
+		logger.exception("Detailed traceback for recommendation error:")
+		return jsonify({"error": "Error generating recommendations"}), 500
+
+@app.route('/recommendations', methods=['GET', 'POST'])
+def recommendations():
+	if request.method == 'POST':
+		try:
+			last_name = request.form['last_name']
+			phone_number = request.form['phone_number']
+			
+			user_query = """SELECT User_ID FROM Users WHERE Last_Name = :last_name AND Phone_Number = :phone_number"""
+			user_cursor = g.conn.execute(text(user_query), {'last_name': last_name, 'phone_number': phone_number})
+			user = user_cursor.fetchone()
+			user_cursor.close()
+			
+			if not user:
+				return render_template("recommendations.html", error="User not found. Please check your last name and phone number.")
+			
+			result, error = get_user_recommendations(user.user_id)
+			
+			if error:
+				return render_template("recommendations.html", error=error)
+			
+			return render_template("recommendations.html", 
+								   recommendations=result['recommendations'],
+								   predicted_cuisine=result['predicted_next_cuisine'])
+				
+		except Exception as e:
+			logger.error(f"Error in recommendations route: {str(e)}")
+			return render_template("recommendations.html", error="Error processing request")
+	
+	return render_template("recommendations.html")
 
 if __name__ == "__main__":
 	import click
